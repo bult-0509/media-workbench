@@ -1,0 +1,3 @@
+electron-v44.3.0-win32-x64.zip
+SHA256 26bf9a617d58d81772b3d68305d59ee48272969c15083c06db634a77358a8d9d
+Official source: https://github.com/electron/electron/releases/download/v44.3.0/SHASUMS256.txt

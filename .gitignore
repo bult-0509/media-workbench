@@ -1,0 +1,9 @@
+config.json
+data/
+.venv/
+tools/ffmpeg/
+tools/BBDown/
+tools/downloads/
+desktop/runtime.excluded/
+__pycache__/
+*.pyc
