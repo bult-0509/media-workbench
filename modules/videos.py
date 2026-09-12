@@ -153,6 +153,7 @@ def smart_search(homepage: str, q: str):
 class DownloadRequest(BaseModel):
     project_id: str
     item_ids: list[str] = Field(min_length=1, max_length=20)
+    rights_confirmed: bool = False
 
 
 def update_stack(item_id: str, *, status: str, error: str = ""):
@@ -225,6 +226,8 @@ def download_worker(job_id: str, project_id: str, items: list[dict]):
 
 @router.post("/download")
 def download(body: DownloadRequest):
+    if not body.rights_confirmed:
+        raise HTTPException(403, "请先确认拥有视频的下载及计划使用授权")
     core.get_project(body.project_id)
     items = [item for item in queue_items() if item["id"] in set(body.item_ids)]
     if len(items) != len(set(body.item_ids)):

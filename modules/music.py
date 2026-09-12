@@ -62,6 +62,7 @@ class Track(BaseModel):
 class MusicSave(Track):
     project_id: str
     relative: str = "auto"
+    rights_confirmed: bool = False
 
 
 def remote_url(track: Track) -> str:
@@ -148,6 +149,8 @@ def download_job(job_id: str, body: MusicSave):
 
 @router.post("/save")
 def save(body: MusicSave):
+    if not body.rights_confirmed:
+        raise HTTPException(403, "请先确认拥有音乐的下载及计划使用授权")
     core.resolve_destination(body.project_id, "music", body.relative)
     job_id = core.create_job("music", body.name, body.model_dump())
     threading.Thread(target=download_job, args=(job_id, body), daemon=True).start()

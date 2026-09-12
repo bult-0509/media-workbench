@@ -39,6 +39,26 @@ async function api(path, options={}) {
   return response.json();
 }
 function run(action){return Promise.resolve().then(action).catch(error=>toast(error.message));}
+function confirmDownloadRights(kind){
+  const dialog=$('#rights-dialog'), isMusic=kind==='music';
+  $('#rights-dialog-title').textContent=isMusic?'确认音乐使用权利':'确认视频下载权利';
+  $('#rights-dialog-copy').textContent=isMusic
+    ?'保存音乐前，请确认你拥有该音乐的下载、剪辑配乐及计划发布所需授权。搜索或试听结果不构成授权。'
+    :'下载视频前，请确认这是你的作品、已获权利人许可的内容，或平台明确允许下载和使用的内容。下载后公开发布或再分发通常还需要另行授权。';
+  $('#rights-check-label').textContent=isMusic?'我确认拥有下载、保存、剪辑配乐及计划使用该音乐的必要授权。':'我确认拥有下载、保存及计划使用所选视频的必要授权。';
+  const check=$('#rights-check'), confirm=$('#rights-confirm');check.checked=false;confirm.disabled=true;
+  return new Promise(resolve=>{
+    let settled=false;
+    const finish=value=>{if(settled)return;settled=true;dialog.close();resolve(value);};
+    check.onchange=()=>{confirm.disabled=!check.checked;};
+    confirm.onclick=()=>finish(true);
+    $('#rights-cancel').onclick=()=>finish(false);
+    $('#rights-cancel-top').onclick=()=>finish(false);
+    dialog.oncancel=event=>{event.preventDefault();finish(false);};
+    dialog.showModal();
+    check.focus();
+  });
+}
 function enabled(id){return state.boot.modules.some(m=>m.id===id && m.enabled && m.installed);}
 
 function nav(){
@@ -194,8 +214,9 @@ async function saveAssets(ids){
 }
 async function saveMusic(track){
   if(!state.project)throw new Error('请先选择视频项目');
+  if(!await confirmDownloadRights('music'))return;
   const button=$('#save-asset');button.disabled=true;
-  try{const result=await api('/api/music/save',{method:'POST',body:{...track,project_id:state.project,relative:state.relative}});state.jobs.set(result.job_id,'queued');toast('音乐获取任务已开始，可在最近保存中查看');}finally{button.disabled=false;}
+  try{const result=await api('/api/music/save',{method:'POST',body:{...track,project_id:state.project,relative:state.relative,rights_confirmed:true}});state.jobs.set(result.job_id,'queued');toast('音乐获取任务已开始，可在最近保存中查看');}finally{button.disabled=false;}
 }
 async function searchMusic(){
   const q=$('#music-query').value.trim();if(!q)return;
@@ -375,7 +396,7 @@ async function previewBvid(){const bvid=$('#bvid-input').value.trim();if(!bvid)t
 async function smartVideoSearch(){const homepage=$('#author-homepage').value.trim(),q=$('#smart-video-query').value.trim();if(!homepage||!q)throw new Error('请填写博主主页链接和要找的视频标题');$('#smart-search-results').innerHTML='<div class="empty-state">正在查找…</div>';const data=await api('/api/videos/smart-search?'+new URLSearchParams({homepage,q}));const items=data.items||[];$('#smart-search-results').innerHTML=items.length?'<div class="video-results">'+items.map(videoCard).join('')+'</div>':'<div class="empty-state">没有找到接近的标题或简介。</div>';bindVideoActions($('#smart-search-results'));}
 async function loadVideoStack(){if(!enabled('videos'))return;const data=await api('/api/videos/stack');state.videoStack=data.items||[];const usable=new Set(state.videoStack.filter(i=>i.status!=='downloading').map(i=>i.id));state.videoChecked=new Set([...state.videoChecked].filter(id=>usable.has(id)));$('#video-stack-count').textContent=state.videoStack.length+' 项';$('#video-download-selected').disabled=!state.videoChecked.size||!state.project;$('#video-stack-list').innerHTML=state.videoStack.length?state.videoStack.map(item=>{const cover=item.cover?'<img src="'+escape(item.cover)+'" alt="" loading="lazy">':icon('video');const label=({ready:'待下载',queued:'已提交',downloading:'下载中',done:'已完成',failed:'失败'})[item.status]||item.status;return '<article class="video-stack-card '+(state.videoChecked.has(item.id)?'selected':'')+'"><label class="stack-check"><input type="checkbox" data-video-check="'+item.id+'" '+(state.videoChecked.has(item.id)?'checked':'')+' '+(item.status==='downloading'?'disabled':'')+'></label><div class="video-cover small">'+cover+'</div><div class="video-copy"><strong>'+escape(item.title)+'</strong><span>'+escape(item.owner||'未知作者')+' · '+escape(item.bvid)+'</span>'+(item.error?'<small class="video-error">'+escape(item.error)+'</small>':'')+'</div><span class="video-status">'+label+'</span><button class="icon-button" data-video-remove="'+item.id+'" '+(item.status==='downloading'?'disabled':'')+' aria-label="移出下载栈">'+icon('close')+'</button></article>';}).join(''):'<div class="empty-state"><h2>视频下载栈为空</h2><p>输入 BV 号，或从指定博主的视频中查找。</p></div>';$$('[data-video-check]').forEach(c=>c.onchange=()=>{c.checked?state.videoChecked.add(c.dataset.videoCheck):state.videoChecked.delete(c.dataset.videoCheck);$('#video-download-selected').disabled=!state.videoChecked.size||!state.project;c.closest('.video-stack-card').classList.toggle('selected',c.checked);});bindVideoActions($('#video-stack-list'));}
 $$('#videos-view [data-video-mode]').forEach(b=>b.onclick=()=>setVideoMode(b.dataset.videoMode));
-$('#bvid-preview').onclick=()=>run(previewBvid);$('#bvid-input').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();run(previewBvid);}};$('#smart-video-search').onclick=()=>run(smartVideoSearch);$('#smart-video-query').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();run(smartVideoSearch);}};$('#video-download-selected').onclick=()=>run(async()=>{if(!state.project)throw new Error('请先新建或选择视频项目');const result=await api('/api/videos/download',{method:'POST',body:{project_id:state.project,item_ids:[...state.videoChecked]}});state.jobs.set(result.job_id,'queued');toast('已开始使用 BBDown 下载到当前项目的视频文件夹');await loadVideoStack();navigate('history');});
+$('#bvid-preview').onclick=()=>run(previewBvid);$('#bvid-input').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();run(previewBvid);}};$('#smart-video-search').onclick=()=>run(smartVideoSearch);$('#smart-video-query').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();run(smartVideoSearch);}};$('#video-download-selected').onclick=()=>run(async()=>{if(!state.project)throw new Error('请先新建或选择视频项目');if(!await confirmDownloadRights('video'))return;const result=await api('/api/videos/download',{method:'POST',body:{project_id:state.project,item_ids:[...state.videoChecked],rights_confirmed:true}});state.jobs.set(result.job_id,'queued');toast('已开始使用 BBDown 下载到当前项目的视频文件夹');await loadVideoStack();navigate('history');});
 
 $('#detail-backdrop').onclick=closeDetail;
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeDetail();});
