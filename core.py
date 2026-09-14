@@ -143,7 +143,8 @@ def init_db():
           id TEXT PRIMARY KEY, path TEXT UNIQUE, source_id TEXT, title TEXT,
           kind TEXT, extension TEXT, size INTEGER, modified REAL, relative TEXT,
           collection TEXT, search_text TEXT, tags TEXT DEFAULT '', favorite INTEGER DEFAULT 0,
-          duration REAL, width INTEGER, height INTEGER, scanned INTEGER DEFAULT 0
+          duration REAL, width INTEGER, height INTEGER, scanned INTEGER DEFAULT 0,
+          use_count INTEGER NOT NULL DEFAULT 0, last_used REAL
         );
         CREATE INDEX IF NOT EXISTS asset_filter ON assets(source_id,kind,scanned);
         CREATE TABLE IF NOT EXISTS jobs (
@@ -179,9 +180,32 @@ def init_db():
         columns = {row["name"] for row in db.execute("PRAGMA table_info(inbox_assignments)")}
         if "issue_id" not in columns:
             db.execute("ALTER TABLE inbox_assignments ADD COLUMN issue_id TEXT DEFAULT ''")
+        asset_columns = {row["name"] for row in db.execute("PRAGMA table_info(assets)")}
+        if "use_count" not in asset_columns:
+            db.execute("ALTER TABLE assets ADD COLUMN use_count INTEGER NOT NULL DEFAULT 0")
+        if "last_used" not in asset_columns:
+            db.execute("ALTER TABLE assets ADD COLUMN last_used REAL")
+        db.execute("""CREATE TABLE IF NOT EXISTS asset_usage (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, asset_id TEXT NOT NULL, used_at REAL NOT NULL,
+          scope TEXT NOT NULL, project_id TEXT DEFAULT ''
+        )""")
+        db.execute("CREATE INDEX IF NOT EXISTS asset_usage_asset_time ON asset_usage(asset_id, used_at DESC)")
         if not db.execute("SELECT 1 FROM issue_projects LIMIT 1").fetchone():
             db.execute("INSERT INTO issue_projects(id,name,number,active,created) VALUES('issue-53','烂活音游 53',53,1,?)", (time.time(),))
         db.execute("UPDATE jobs SET status='failed',error='上次运行中断，可以重新提交；已完成的文件不会覆盖',updated=? WHERE status IN ('queued','running')", (time.time(),))
+
+
+def record_asset_uses(asset_ids: list[str], *, scope: str, project_id: str = "") -> None:
+    """Persist one use per unique asset when a native cross-app drag is started."""
+    ids = list(dict.fromkeys(asset_ids))
+    if not ids:
+        return
+    now = time.time()
+    with database() as db:
+        for asset_id in ids:
+            db.execute("UPDATE assets SET use_count=use_count+1,last_used=? WHERE id=?", (now, asset_id))
+            db.execute("INSERT INTO asset_usage(asset_id,used_at,scope,project_id) VALUES(?,?,?,?)",
+                       (asset_id, now, scope, project_id))
 
 
 def require_module(module: str):

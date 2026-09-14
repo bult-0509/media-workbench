@@ -36,7 +36,7 @@ def listing(project_id:str, sort: str = 'modified', order: str = 'desc'):
     sync_shared_files(shared_id or project_id)
     with core.database() as db:
         rows=db.execute('''SELECT s.project_id AS owner_project_id,s.asset_id,s.added,a.title,a.path,a.kind,a.extension,a.size,
-            a.collection,a.modified FROM stack_items s LEFT JOIN assets a ON s.asset_id=a.id
+            a.collection,a.modified,a.use_count,a.last_used FROM stack_items s LEFT JOIN assets a ON s.asset_id=a.id
             WHERE s.project_id=? OR (s.project_id=? AND NOT EXISTS
               (SELECT 1 FROM stack_hidden h WHERE h.project_id=? AND h.asset_id=s.asset_id))
             ORDER BY (s.project_id=?) DESC,s.added,s.asset_id''',(project_id,shared_id,project_id,project_id)).fetchall()
@@ -52,6 +52,7 @@ def listing(project_id:str, sort: str = 'modified', order: str = 'desc'):
         item['title']=item['title'] or '素材已移除'
         result.append(item)
     sorters = {'modified': lambda item: item.get('modified') or 0, 'size': lambda item: item.get('size') or 0,
+               'uses': lambda item: (item.get('use_count') or 0, item.get('last_used') or 0),
                'type': lambda item: ((item.get('kind') or ''), (item.get('extension') or ''), item['title'].casefold()),
                'name': lambda item: item['title'].casefold()}
     if sort not in sorters or order not in {'asc', 'desc'}:
@@ -115,4 +116,5 @@ def drag(project_id:str,body:Items):
             path=Path(asset['path'])
             if not path.is_file():raise HTTPException(404,'素材已移动，请重新扫描')
             files.append(str(path.resolve()))
+    core.record_asset_uses(ids, scope='stack', project_id=project_id)
     return {'files':files}

@@ -111,7 +111,8 @@ def list_assets(q: str = "", kind: str = "", source: str = "", collection: str =
         where.append("(search_text || ' ' || lower(title) || ' ' || lower(tags)) LIKE ? ESCAPE '\\'")
         params.append("%" + escaped + "%")
     clause = " AND ".join(where)
-    columns = {"modified": "modified", "size": "size", "type": "kind, extension", "name": "title COLLATE NOCASE"}
+    columns = {"modified": "modified", "size": "size", "type": "kind, extension", "name": "title COLLATE NOCASE",
+               "uses": "use_count, last_used"}
     if sort not in columns or order not in {"asc", "desc"}:
         raise HTTPException(400, "不支持的排序方式")
     direction = order.upper()
@@ -219,4 +220,5 @@ def drag_files(body: DragItems):
         if not path.is_file():
             raise HTTPException(404, "素材已移动，请重新扫描")
         files.append(str(path.resolve()))
+    core.record_asset_uses(list(dict.fromkeys(body.asset_ids)), scope="library")
     return {"files": files}
