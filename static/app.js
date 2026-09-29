@@ -25,7 +25,7 @@ const paths = {
 };
 const icon = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.folder}</svg>`;
 const kindLabel = {video:'视频',audio:'音频',image:'图片'};
-const state = {boot:null,view:'library',source:'',collection:'',folder:'',kind:'',q:'',page:1,pages:1,stats:null,items:[],selected:null,project:'',relative:'auto',checked:new Set(),request:0,jobs:new Map(),toastTimer:null,detailRequest:0,tracks:[],stack:[],stackChecked:new Set(),stackCount:0,compact:false,issue:'',inboxSelected:new Set(),videoMode:'bv',videoStack:[],videoChecked:new Set(),librarySort:'modified-desc',stackSort:'modified-desc',sourceTree:{},treeOpen:new Set(),treeLoading:new Set(),bbdown:null};
+const state = {boot:null,view:'library',source:'',collection:'',folder:'',kind:'',q:'',page:1,pages:1,stats:null,items:[],selected:null,project:'',relative:'auto',checked:new Set(),request:0,jobs:new Map(),toastTimer:null,detailRequest:0,tracks:[],stack:[],stackChecked:new Set(),stackCount:0,compact:false,issue:'',inboxSelected:new Set(),videoMode:'bv',videoStack:[],videoChecked:new Set(),librarySort:'modified-desc',stackSort:'modified-desc',sourceTree:{},treeOpen:new Set(),treeLoading:new Set(),explorerParent:'',bbdown:null};
 
 function size(bytes) {if(bytes < 1024*1024)return `${(bytes/1024).toFixed(0)} KB`;if(bytes < 1024**3)return `${(bytes/1024**2).toFixed(1)} MB`;return `${(bytes/1024**3).toFixed(2)} GB`;}
 function duration(value){if(!value)return '';const s=Math.round(value);return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;}
@@ -71,23 +71,44 @@ async function loadTree(source,parent=''){
   state.treeLoading.add(key);nav();
   try{const data=await api('/api/library/source-tree?'+new URLSearchParams({source_id:source,parent}));state.sourceTree[key]=data.items||[];}finally{state.treeLoading.delete(key);nav();}
 }
+function explorerPath(source){
+  const sourceName=state.boot.sources.find(item=>item.id===source)?.name||'素材来源';
+  const parts=state.explorerParent?state.explorerParent.split('\\').filter(Boolean):[];
+  return [sourceName,...parts];
+}
+function renderSourceExplorer(){
+  const box=$('#source-explorer');if(!box||!state.boot||!enabled('library'))return;
+  const sources=state.boot.sources.filter(source=>(state.stats?.sources?.[source.id]||0)>0);
+  const active=state.source&&sources.some(source=>source.id===state.source)?state.source:'';
+  const rootKey=treeKey(active,state.explorerParent),items=active?(state.sourceTree[rootKey]||[]):[];
+  const crumbs=active?explorerPath(active):[];
+  box.innerHTML=`<div class="source-explorer-head"><div><span class="eyebrow">素材来源地图</span><strong>${active?'沿目录定位素材':'先选择一个素材来源'}</strong></div>${active?`<button id="explorer-reset" class="text-button">查看全部来源</button>`:''}</div><div class="source-root-grid">${sources.map(source=>`<button class="source-root-card ${active===source.id?'active':''}" data-explorer-source="${escape(source.id)}"><span class="source-root-icon">${icon('folder')}</span><span><strong>${escape(source.name)}</strong><small>${(state.stats?.sources?.[source.id]||0).toLocaleString()} 份素材</small></span></button>`).join('')||'<p class="source-empty">素材扫描完成后，这里会显示来源。</p>'}</div>${active?`<div class="explorer-path"><button id="explorer-home" class="breadcrumb-root">${icon('folder')} ${escape(crumbs[0])}</button>${crumbs.slice(1).map((part,index)=>`<span>／</span><button class="breadcrumb-part" data-explorer-crumb="${index+1}">${escape(part)}</button>`).join('')}<span class="explorer-path-count">${items.length?`${items.length} 个下级文件夹`:'没有下级文件夹'}</span></div><div class="folder-map">${items.map(item=>`<article class="folder-map-node ${state.folder===item.relative?'selected':''}"><button class="folder-map-main" data-explorer-filter="${escape(item.relative)}"><span class="folder-map-icon">${icon('folder')}</span><span><strong>${escape(item.name)}</strong><small>${item.count.toLocaleString()} 份素材</small></span></button>${item.has_children?`<button class="folder-map-deeper" data-explorer-deeper="${escape(item.relative)}" aria-label="进入 ${escape(item.name)}">进入</button>`:''}</article>`).join('')||'<p class="source-empty">当前目录没有可继续展开的文件夹；可直接查看其素材。</p>'}</div>`:''}`;
+  $$('[data-explorer-source]').forEach(button=>button.onclick=()=>run(async()=>{state.source=button.dataset.explorerSource;state.collection='';state.folder='';state.explorerParent='';state.page=1;await loadTree(state.source);navigate('library',true);}));
+  $('#explorer-reset')?.addEventListener('click',()=>{state.source='';state.folder='';state.collection='';state.explorerParent='';navigate('library',true);});
+  $('#explorer-home')?.addEventListener('click',()=>run(async()=>{state.explorerParent='';state.folder='';state.page=1;await loadTree(active);renderSourceExplorer();loadAssets();}));
+  $$('[data-explorer-crumb]').forEach(button=>button.onclick=()=>run(async()=>{const depth=Number(button.dataset.explorerCrumb);state.explorerParent=state.explorerParent.split('\\').slice(0,depth).join('\\');state.folder=state.explorerParent;state.page=1;await loadTree(active,state.explorerParent);renderSourceExplorer();loadAssets();}));
+  $$('[data-explorer-filter]').forEach(button=>button.onclick=()=>{state.folder=button.dataset.explorerFilter;state.collection='';state.page=1;loadAssets();renderSourceExplorer();});
+  $$('[data-explorer-deeper]').forEach(button=>button.onclick=()=>run(async()=>{state.explorerParent=button.dataset.explorerDeeper;state.folder=state.explorerParent;state.page=1;await loadTree(active,state.explorerParent);renderSourceExplorer();loadAssets();}));
+}
+
 function nav(){
   const entries=[['library','grid','素材库','library'],['stack','stack','素材栈','stack'],['favorites','star','收藏','library'],['videos','video','视频下载','videos'],['music','music','音乐','music'],['subtitles','subtitles','字幕','subtitles'],['inbox','inbox','文件接收','inbox'],['history','history','记录',null]];
   $('#main-nav').innerHTML=entries.filter(e=>!e[3]||enabled(e[3])).map(([id,glyph,label])=>`<button class="nav-item ${state.view===id?'active':''}" data-view="${id}" title="${label}" aria-label="${label}" ${state.view===id?'aria-current="page"':''}>${icon(glyph)}<span class="label">${label}</span>${id==='stack'?`<span class="count">${state.stackCount||0}</span>`:''}</button>`).join('');
   $$('#main-nav button').forEach(b=>b.onclick=()=>navigate(b.dataset.view));
   $('#source-nav').innerHTML=enabled('library')?state.boot.sources.map(s=>{const rootKey=treeKey(s.id),open=state.treeOpen.has(rootKey),busy=state.treeLoading.has(rootKey);return `<div class="source-row ${state.source===s.id&&state.view==='library'&&!state.folder?'active':''}"><button class="tree-expand source-expand" data-tree-expand="${escape(s.id)}" data-tree-parent="" aria-label="${open?'收起':'展开'} ${escape(s.name)}">${open?'−':'+'}</button><button class="nav-item source-item" data-source="${escape(s.id)}" title="${escape(s.path)}">${icon('folder')}<span class="label">${escape(s.name)}</span><span class="count">${state.stats?(state.stats.sources?.[s.id]??0):'—'}</span></button>${s.managed?`<button class="source-remove" data-remove-source="${escape(s.id)}" aria-label="从素材库移除 ${escape(s.name)}" title="移除来源">×</button>`:''}</div><div class="source-tree" ${open?'':'hidden'}>${busy?'<span class="tree-loading">正在读取…</span>':treeNodes(s.id)}</div>`;}).join(''):'';
-  $$('[data-source]').forEach(b=>b.onclick=()=>{state.source=b.dataset.source;state.collection='';state.folder='';state.page=1;navigate('library',true);});
-  $$('[data-tree-folder]').forEach(b=>b.onclick=()=>{state.source=b.dataset.treeFolder;state.folder=b.dataset.treePath;state.collection='';state.page=1;navigate('library',true);});
+  $$('[data-source]').forEach(b=>b.onclick=()=>{state.source=b.dataset.source;state.collection='';state.folder='';state.explorerParent='';state.page=1;navigate('library',true);});
+  $$('[data-tree-folder]').forEach(b=>b.onclick=()=>{state.source=b.dataset.treeFolder;state.folder=b.dataset.treePath;state.collection='';state.explorerParent=b.dataset.treePath;state.page=1;navigate('library',true);});
   $$('[data-tree-expand]').forEach(b=>b.onclick=()=>run(async()=>{const key=treeKey(b.dataset.treeExpand,b.dataset.treeParent);state.treeOpen.has(key)?state.treeOpen.delete(key):state.treeOpen.add(key);nav();if(state.treeOpen.has(key))await loadTree(b.dataset.treeExpand,b.dataset.treeParent);}));
   $$('[data-remove-source]').forEach(b=>b.onclick=()=>run(async()=>{
     const id=b.dataset.removeSource;await api('/api/sources/'+id,{method:'DELETE'});
-    if(state.source===id){state.source='';state.collection='';state.folder='';}state.boot=await api('/api/bootstrap');state.stats=await api('/api/library/stats');nav();navigate('library',true);toast('已从素材库移除此来源；原始文件仍保留在磁盘');
+    if(state.source===id){state.source='';state.collection='';state.folder='';state.explorerParent='';}state.boot=await api('/api/bootstrap');state.stats=await api('/api/library/stats');nav();navigate('library',true);toast('已从素材库移除此来源；原始文件仍保留在磁盘');
   }));
+  renderSourceExplorer();
 }
 function navigate(view,keepSource=false){
   const module=view==='favorites'?'library':view;
   if(module!=='history'&&!enabled(module))view='history';
-  if(view==='library'&&!keepSource){state.source='';state.collection='';state.folder='';}
+  if(view==='library'&&!keepSource){state.source='';state.collection='';state.folder='';state.explorerParent='';}
   if(state.compact)view='stack';
   closeDetail();state.view=view;document.body.classList.toggle('stack-page',view==='stack');state.page=1;state.checked.clear();selection();
   history.replaceState(null,'',`#${view}`);
