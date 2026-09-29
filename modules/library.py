@@ -96,7 +96,7 @@ def scan_status():
 
 
 @router.get("/assets")
-def list_assets(q: str = "", kind: str = "", source: str = "", collection: str = "", favorite: bool = False,
+def list_assets(q: str = "", kind: str = "", source: str = "", collection: str = "", folder: str = "", favorite: bool = False,
                 sort: str = "modified", order: str = "desc",
                 page: int = Query(1, ge=1), limit: int = Query(36, ge=1, le=80)):
     where, params = ["scanned=1"], []
@@ -106,6 +106,11 @@ def list_assets(q: str = "", kind: str = "", source: str = "", collection: str =
             params.append(value)
     if favorite:
         where.append("favorite=1")
+    if folder:
+        folder = folder.replace("/", "\\").strip("\\")
+        escaped_folder = folder.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        where.append("(relative=? OR relative LIKE ? ESCAPE '\\')")
+        params.extend([folder, escaped_folder + "\\\\%"])
     for token in core.normalize(q)[:200].split():
         escaped = token.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         where.append("(search_text || ' ' || lower(title) || ' ' || lower(tags)) LIKE ? ESCAPE '\\'")
@@ -121,6 +126,34 @@ def list_assets(q: str = "", kind: str = "", source: str = "", collection: str =
         count = db.execute("SELECT COUNT(*) FROM assets WHERE " + clause, params).fetchone()[0]
         rows = db.execute("SELECT * FROM assets WHERE " + clause + f" ORDER BY {sort_sql}, id LIMIT ? OFFSET ?", [*params, limit, (page - 1) * limit]).fetchall()
     return {"items": [dict(row) for row in rows], "total": count, "page": page, "pages": max(1, (count + limit - 1) // limit)}
+
+
+@router.get("/source-tree")
+def source_tree(source_id: str, parent: str = ""):
+    """Return one folder level so large material libraries stay responsive."""
+    source = next((item for item in core.indexed_source_configs() if item["id"] == source_id), None)
+    if not source:
+        raise HTTPException(404, "素材来源不存在")
+    parent_parts = tuple(part for part in parent.replace("/", "\\").split("\\") if part)
+    with core.database() as db:
+        relatives = [row["relative"] for row in db.execute(
+            "SELECT relative FROM assets WHERE scanned=1 AND source_id=?", (source_id,))]
+    children: dict[str, dict] = {}
+    direct_files = 0
+    for relative in relatives:
+        parts = tuple(part for part in Path(relative).parts if part not in {".", ""})
+        if parts[:len(parent_parts)] != parent_parts or len(parts) <= len(parent_parts):
+            continue
+        next_part = parts[len(parent_parts)]
+        if len(parts) == len(parent_parts) + 1:
+            direct_files += 1
+            continue
+        item = children.setdefault(next_part, {"name": next_part, "relative": "\\".join((*parent_parts, next_part)), "count": 0, "has_children": False})
+        item["count"] += 1
+        if len(parts) > len(parent_parts) + 2:
+            item["has_children"] = True
+    return {"source_id": source_id, "parent": "\\".join(parent_parts), "direct_files": direct_files,
+            "items": sorted(children.values(), key=lambda item: item["name"].casefold())}
 
 
 @router.get("/stats")

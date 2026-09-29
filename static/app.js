@@ -25,7 +25,7 @@ const paths = {
 };
 const icon = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.folder}</svg>`;
 const kindLabel = {video:'视频',audio:'音频',image:'图片'};
-const state = {boot:null,view:'library',source:'',collection:'',kind:'',q:'',page:1,pages:1,stats:null,items:[],selected:null,project:'',relative:'auto',checked:new Set(),request:0,jobs:new Map(),toastTimer:null,detailRequest:0,tracks:[],stack:[],stackChecked:new Set(),stackCount:0,compact:false,issue:'',inboxSelected:new Set(),videoMode:'bv',videoStack:[],videoChecked:new Set(),librarySort:'modified-desc',stackSort:'modified-desc'};
+const state = {boot:null,view:'library',source:'',collection:'',folder:'',kind:'',q:'',page:1,pages:1,stats:null,items:[],selected:null,project:'',relative:'auto',checked:new Set(),request:0,jobs:new Map(),toastTimer:null,detailRequest:0,tracks:[],stack:[],stackChecked:new Set(),stackCount:0,compact:false,issue:'',inboxSelected:new Set(),videoMode:'bv',videoStack:[],videoChecked:new Set(),librarySort:'modified-desc',stackSort:'modified-desc',sourceTree:{},treeOpen:new Set(),treeLoading:new Set(),bbdown:null};
 
 function size(bytes) {if(bytes < 1024*1024)return `${(bytes/1024).toFixed(0)} KB`;if(bytes < 1024**3)return `${(bytes/1024**2).toFixed(1)} MB`;return `${(bytes/1024**3).toFixed(2)} GB`;}
 function duration(value){if(!value)return '';const s=Math.round(value);return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;}
@@ -61,25 +61,33 @@ function confirmDownloadRights(kind){
 }
 function enabled(id){return state.boot.modules.some(m=>m.id===id && m.enabled && m.installed);}
 
+function treeKey(source,parent=''){return `${source}|${parent}`;}
+function treeNodes(source,parent='',depth=0){
+  const key=treeKey(source,parent),nodes=state.sourceTree[key]||[];
+  return nodes.map(node=>{const nodeKey=treeKey(source,node.relative),open=state.treeOpen.has(nodeKey),busy=state.treeLoading.has(nodeKey);return `<div class="source-tree-node" style="--tree-depth:${depth}"><button class="tree-expand" data-tree-expand="${escape(source)}" data-tree-parent="${escape(node.relative)}" aria-label="${open?'收起':'展开'} ${escape(node.name)}" ${node.has_children?'':'disabled'}>${node.has_children?(open?'−':'+'):''}</button><button class="tree-folder ${state.source===source&&state.folder===node.relative?'active':''}" data-tree-folder="${escape(source)}" data-tree-path="${escape(node.relative)}" title="${escape(node.relative)}">${icon('folder')}<span>${escape(node.name)}</span><small>${node.count}</small></button></div>${open?`<div class="source-tree-children">${busy?'<span class="tree-loading">正在读取…</span>':treeNodes(source,node.relative,depth+1)}</div>`:''}`;}).join('');
+}
+async function loadTree(source,parent=''){
+  const key=treeKey(source,parent);if(state.sourceTree[key]||state.treeLoading.has(key))return;
+  state.treeLoading.add(key);nav();
+  try{const data=await api('/api/library/source-tree?'+new URLSearchParams({source_id:source,parent}));state.sourceTree[key]=data.items||[];}finally{state.treeLoading.delete(key);nav();}
+}
 function nav(){
   const entries=[['library','grid','素材库','library'],['stack','stack','素材栈','stack'],['favorites','star','收藏','library'],['videos','video','视频下载','videos'],['music','music','音乐','music'],['subtitles','subtitles','字幕','subtitles'],['inbox','inbox','文件接收','inbox'],['history','history','记录',null]];
   $('#main-nav').innerHTML=entries.filter(e=>!e[3]||enabled(e[3])).map(([id,glyph,label])=>`<button class="nav-item ${state.view===id?'active':''}" data-view="${id}" title="${label}" aria-label="${label}" ${state.view===id?'aria-current="page"':''}>${icon(glyph)}<span class="label">${label}</span>${id==='stack'?`<span class="count">${state.stackCount||0}</span>`:''}</button>`).join('');
   $$('#main-nav button').forEach(b=>b.onclick=()=>navigate(b.dataset.view));
-  $('#source-nav').innerHTML=enabled('library')?state.boot.sources.map(s=>`<div class="source-row ${state.source===s.id && state.view==='library'?'active':''}"><button class="nav-item source-item" data-source="${s.id}" title="${escape(s.path)}">${icon('folder')}<span class="label">${escape(s.name)}</span><span class="count">${state.stats?(state.stats.sources?.[s.id]??0):'—'}</span></button>${s.managed?`<button class="source-remove" data-remove-source="${s.id}" aria-label="从素材库移除 ${escape(s.name)}" title="移除来源">×</button>`:''}</div>`).join(''):'';
-  $$('[data-source]').forEach(b=>b.onclick=()=>{state.source=state.source===b.dataset.source?'':b.dataset.source;state.collection='';state.page=1;navigate('library',true);});
+  $('#source-nav').innerHTML=enabled('library')?state.boot.sources.map(s=>{const rootKey=treeKey(s.id),open=state.treeOpen.has(rootKey),busy=state.treeLoading.has(rootKey);return `<div class="source-row ${state.source===s.id&&state.view==='library'&&!state.folder?'active':''}"><button class="tree-expand source-expand" data-tree-expand="${escape(s.id)}" data-tree-parent="" aria-label="${open?'收起':'展开'} ${escape(s.name)}">${open?'−':'+'}</button><button class="nav-item source-item" data-source="${escape(s.id)}" title="${escape(s.path)}">${icon('folder')}<span class="label">${escape(s.name)}</span><span class="count">${state.stats?(state.stats.sources?.[s.id]??0):'—'}</span></button>${s.managed?`<button class="source-remove" data-remove-source="${escape(s.id)}" aria-label="从素材库移除 ${escape(s.name)}" title="移除来源">×</button>`:''}</div><div class="source-tree" ${open?'':'hidden'}>${busy?'<span class="tree-loading">正在读取…</span>':treeNodes(s.id)}</div>`;}).join(''):'';
+  $$('[data-source]').forEach(b=>b.onclick=()=>{state.source=b.dataset.source;state.collection='';state.folder='';state.page=1;navigate('library',true);});
+  $$('[data-tree-folder]').forEach(b=>b.onclick=()=>{state.source=b.dataset.treeFolder;state.folder=b.dataset.treePath;state.collection='';state.page=1;navigate('library',true);});
+  $$('[data-tree-expand]').forEach(b=>b.onclick=()=>run(async()=>{const key=treeKey(b.dataset.treeExpand,b.dataset.treeParent);state.treeOpen.has(key)?state.treeOpen.delete(key):state.treeOpen.add(key);nav();if(state.treeOpen.has(key))await loadTree(b.dataset.treeExpand,b.dataset.treeParent);}));
   $$('[data-remove-source]').forEach(b=>b.onclick=()=>run(async()=>{
-    const id=b.dataset.removeSource;
-    await api('/api/sources/'+id,{method:'DELETE'});
-    if(state.source===id){state.source='';state.collection='';}
-    state.boot=await api('/api/bootstrap');state.stats=await api('/api/library/stats');
-    nav();navigate('library',true);toast('已从素材库移除此来源；原始文件仍保留在磁盘');
+    const id=b.dataset.removeSource;await api('/api/sources/'+id,{method:'DELETE'});
+    if(state.source===id){state.source='';state.collection='';state.folder='';}state.boot=await api('/api/bootstrap');state.stats=await api('/api/library/stats');nav();navigate('library',true);toast('已从素材库移除此来源；原始文件仍保留在磁盘');
   }));
 }
-
 function navigate(view,keepSource=false){
   const module=view==='favorites'?'library':view;
   if(module!=='history'&&!enabled(module))view='history';
-  if(view==='library'&&!keepSource){state.source='';state.collection='';}
+  if(view==='library'&&!keepSource){state.source='';state.collection='';state.folder='';}
   if(state.compact)view='stack';
   closeDetail();state.view=view;document.body.classList.toggle('stack-page',view==='stack');state.page=1;state.checked.clear();selection();
   history.replaceState(null,'',`#${view}`);
@@ -88,7 +96,7 @@ function navigate(view,keepSource=false){
   $('#results-label').textContent='';nav();
   document.querySelectorAll('audio,video').forEach(p=>p.pause());
   if(view==='library'||view==='favorites'){if(!enabled('library'))return;if(state.stats)filters();run(()=>loadAssets());}
-  else {state.selected=null;renderEmptyDetail();if(view==='stack')run(()=>loadStack());if(view==='videos')run(()=>loadVideoStack());if(view==='history')run(()=>loadJobs(true));if(view==='subtitles')run(()=>loadSubtitleStatus());if(view==='inbox')run(()=>loadInbox());}
+  else {state.selected=null;renderEmptyDetail();if(view==='stack')run(()=>loadStack());if(view==='videos'){run(()=>loadVideoStack());run(()=>loadBBDLogin());}if(view==='history')run(()=>loadJobs(true));if(view==='subtitles')run(()=>loadSubtitleStatus());if(view==='inbox')run(()=>loadInbox());}
 }
 
 async function bootstrap(){
@@ -129,7 +137,7 @@ function filters(){
 
 async function loadAssets(){
   const request=++state.request;
-  const query=new URLSearchParams({q:state.q,kind:state.kind,source:state.source,collection:state.collection,favorite:String(state.view==='favorites'),sort:state.librarySort.split('-')[0],order:state.librarySort.split('-')[1],page:state.page,limit:24});
+  const query=new URLSearchParams({q:state.q,kind:state.kind,source:state.source,collection:state.collection,folder:state.folder,favorite:String(state.view==='favorites'),sort:state.librarySort.split('-')[0],order:state.librarySort.split('-')[1],page:state.page,limit:24});
   const data=await api('/api/library/assets?'+query);
   if(request!==state.request || !['library','favorites'].includes(state.view))return;
   state.items=data.items;state.pages=data.pages;
@@ -175,8 +183,9 @@ async function renderDetail(){
   document.querySelectorAll('#detail-panel audio,#detail-panel video').forEach(p=>p.pause());
   const media=isMusic||a.kind==='audio'?wave(a.id):a.kind==='video'?`<video controls preload="none" playsinline poster="/api/library/assets/${a.id}/thumb" src="/api/library/assets/${a.id}/file"></video>`:`<img alt="${escape(a.title)}" src="/api/library/assets/${a.id}/file">`;
   const tags=isMusic?[a.artist,a.album].filter(Boolean):[a.collection,...a.tags.split(/[,，\s]+/).filter(Boolean)];
-  $('#detail-panel').innerHTML=`<div class="detail-heading"><span>${isMusic?'音乐预览':'素材预览'}</span><button id="close-detail" class="icon-button" aria-label="关闭预览">${icon('close')}</button></div><div class="detail-media">${media}</div>${!isMusic&&a.kind==='audio'?`<audio class="audio-player" controls preload="none" src="/api/library/assets/${a.id}/file"></audio>`:''}${isMusic?'<button id="track-preview" class="quiet-button" style="margin-top:12px;width:100%">试听这首音乐</button><div id="track-player"></div>':''}<h2 class="detail-title">${escape(a.title||a.name)}</h2><div class="detail-fileinfo">${isMusic?'':`<span>${escape(a.extension.slice(1).toUpperCase())}</span><span>${size(a.size)}</span>`}</div><div class="detail-fileinfo" id="detail-duration">${isMusic?'':escape([duration(a.duration),a.width?`${a.width} × ${a.height}`:''].filter(Boolean).join(' · '))}</div><div class="detail-tags">${tags.map(t=>`<span class="tag">${escape(t)}</span>`).join('')}</div>${!isMusic?`<details class="detail-location"><summary>原文件路径</summary><span>${escape(a.path)}</span></details>`:''}<div class="detail-destination"><div class="destination-label">${icon('folder')}<span>保存到</span></div><div class="destination-path" id="destination-path">正在匹配项目位置…</div><div class="destination-reason" id="destination-reason"></div></div>${!isMusic&&enabled('stack')?'<button id="add-stack" class="primary-button">加入素材栈</button>':''}<button id="save-asset" class="quiet-button save-button" ${!state.project?'disabled':''}>${icon('arrow')}<span>${isMusic?'下载到当前项目':'保存到当前项目'}</span></button>${!isMusic?`<div class="secondary-actions"><button id="favorite-asset" class="${a.favorite?'favorite-on':''}">${icon('star')}${a.favorite?'已收藏':'收藏素材'}</button><button id="open-source">${icon('external')}原文件夹</button><button id="edit-tags" aria-label="编辑素材标签" title="编辑标签">${icon('edit')}</button></div><div id="metadata-editor" hidden class="metadata-editor"><label>显示名称<input id="edit-title" value="${escape(a.title)}"></label><label>搜索标签<input id="edit-tags-input" value="${escape(a.tags)}" placeholder="例如：震惊 回头 反转"></label><button id="save-tags" class="small-primary">保存标注</button></div>`:''}<button id="remember-destination" class="text-button" ${state.relative==='auto'?'hidden':''}>记住此项目的同类素材保存位置</button>`;
+  $('#detail-panel').innerHTML=`<div class="detail-heading"><span>${isMusic?'音乐预览':'素材预览'}</span><button id="close-detail" class="icon-button" aria-label="关闭预览">${icon('close')}</button></div><div class="detail-media ${!isMusic?'detail-draggable':''}" ${!isMusic?`data-drag-detail="${escape(a.id)}" draggable="true" title="拖入剪辑软件"`:''}>${media}</div>${!isMusic&&a.kind==='audio'?`<audio class="audio-player" controls preload="none" src="/api/library/assets/${a.id}/file"></audio>`:''}${isMusic?'<button id="track-preview" class="quiet-button" style="margin-top:12px;width:100%">试听这首音乐</button><div id="track-player"></div>':''}<h2 class="detail-title">${escape(a.title||a.name)}</h2><div class="detail-fileinfo">${isMusic?'':`<span>${escape(a.extension.slice(1).toUpperCase())}</span><span>${size(a.size)}</span>`}</div><div class="detail-fileinfo" id="detail-duration">${isMusic?'':escape([duration(a.duration),a.width?`${a.width} × ${a.height}`:''].filter(Boolean).join(' · '))}</div><div class="detail-tags">${tags.map(t=>`<span class="tag">${escape(t)}</span>`).join('')}</div>${!isMusic?`<details class="detail-location"><summary>原文件路径</summary><span>${escape(a.path)}</span></details>`:''}<div class="detail-destination"><div class="destination-label">${icon('folder')}<span>保存到</span></div><div class="destination-path" id="destination-path">正在匹配项目位置…</div><div class="destination-reason" id="destination-reason"></div></div>${!isMusic&&enabled('stack')?'<button id="add-stack" class="primary-button">加入素材栈</button>':''}<button id="save-asset" class="quiet-button save-button" ${!state.project?'disabled':''}>${icon('arrow')}<span>${isMusic?'下载到当前项目':'保存到当前项目'}</span></button>${!isMusic?`<div class="secondary-actions"><button id="favorite-asset" class="${a.favorite?'favorite-on':''}">${icon('star')}${a.favorite?'已收藏':'收藏素材'}</button><button id="open-source">${icon('external')}原文件夹</button><button id="edit-tags" aria-label="编辑素材标签" title="编辑标签">${icon('edit')}</button></div><div id="metadata-editor" hidden class="metadata-editor"><label>显示名称<input id="edit-title" value="${escape(a.title)}"></label><label>搜索标签<input id="edit-tags-input" value="${escape(a.tags)}" placeholder="例如：震惊 回头 反转"></label><button id="save-tags" class="small-primary">保存标注</button></div>`:''}<button id="remember-destination" class="text-button" ${state.relative==='auto'?'hidden':''}>记住此项目的同类素材保存位置</button>`;
   $('#close-detail').onclick=closeDetail;
+  $$('[data-drag-detail]').forEach(card=>card.ondragstart=e=>{e.preventDefault();if(!window.mediaDesk){toast('请在素材台桌面窗口中拖出素材；浏览器页面不能跨应用拖放');return;}window.mediaDesk.startDrag({scope:'library',asset_ids:[card.dataset.dragDetail]});});
   if($('#add-stack'))$('#add-stack').onclick=()=>run(()=>addToStack([a.id]));
   $('#save-asset').onclick=()=>run(()=>isMusic?saveMusic(a):saveAssets([a.id]));
   if(!isMusic){
@@ -290,7 +299,7 @@ const projectPicker=createProjectPicker({state,api,escape,icon,selectProject,toa
 $('#new-project').onclick=projectPicker.openNewProject;
 $('#destination-select').onchange=()=>run(async()=>{state.relative=$('#destination-select').value;await updateDestination();});
 let searchTimer;$('#search-input').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{state.q=$('#search-input').value;state.page=1;run(loadAssets);},220);};
-$('#collection-select').onchange=()=>{state.collection=$('#collection-select').value;state.page=1;run(loadAssets);};
+$('#collection-select').onchange=()=>{state.collection=$('#collection-select').value;state.folder='';state.page=1;run(loadAssets);};
 $('#previous-page').onclick=()=>{state.page=Math.max(1,state.page-1);run(loadAssets);};$('#next-page').onclick=()=>{state.page=Math.min(state.pages,state.page+1);run(loadAssets);};
 $('#clear-selection').onclick=()=>{state.checked.clear();$$('[data-check]').forEach(c=>c.checked=false);selection();};$('#batch-save').onclick=()=>run(()=>saveAssets([...state.checked]));
 const rescan=()=>run(async()=>{await api('/api/library/scan',{method:'POST'});toast('正在更新素材索引和近期目录习惯');});$('#rescan-button').onclick=rescan;$('#refresh-layouts').onclick=rescan;
@@ -381,6 +390,14 @@ $('#stack-clear').onclick=()=>run(async()=>{await api(`/api/stack/${state.projec
 $('#stack-save').onclick=()=>run(()=>saveAssets(state.stackChecked.size?[...state.stackChecked]:state.stack.filter(a=>a.available).map(a=>a.asset_id)));
 setInterval(()=>{if(state.boot&&enabled('stack'))run(()=>loadStack(false));},3000);
 
+
+async function loadBBDLogin(){
+  if(!enabled('videos'))return;const info=await api('/api/videos/login/status');state.bbdown=info;
+  const status=info.login_window_open?'扫码窗口已打开，请使用哔哩哔哩 APP 扫描终端中的二维码':info.web_login?'已检测到 Web 登录数据，可下载需要登录的内容':'未检测到 Web 登录数据';
+  $('#bbdown-login').innerHTML=`<div><strong>BBDown 登录</strong><span class="bbdown-state ${info.web_login?'logged-in':''}">${escape(status)}</span><small>登录方式：点击右侧按钮后，在弹出的终端中用哔哩哔哩 APP 扫码。</small></div><div class="bbdown-actions"><button id="bbdown-refresh" class="quiet-button">刷新状态</button><button id="bbdown-login-start" class="small-primary">${info.login_window_open?'扫码窗口已打开':'打开扫码登录'}</button></div>`;
+  $('#bbdown-refresh').onclick=()=>run(loadBBDLogin);
+  $('#bbdown-login-start').onclick=()=>run(async()=>{const result=await api('/api/videos/login/start',{method:'POST'});toast(result.started?'已打开 BBDown 扫码窗口，请在终端扫描二维码':'扫码窗口已在运行');setTimeout(()=>run(loadBBDLogin),1200);});
+}
 
 function videoCard(item){
   const cover=item.cover?'<img src="'+escape(item.cover)+'" alt="" loading="lazy">':icon('video');

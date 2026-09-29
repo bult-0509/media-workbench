@@ -66,6 +66,48 @@ def video_info(bvid: str) -> dict:
     return item
 
 
+LOGIN_PROCESS: subprocess.Popen | None = None
+
+
+def bbdown_path() -> Path:
+    executable = Path(core.CONFIG.get("bbdown", "")).resolve()
+    if not executable.is_file():
+        raise HTTPException(503, "未找到 BBDown.exe，请在素材台设置中检查路径")
+    return executable
+
+
+def login_state() -> dict:
+    global LOGIN_PROCESS
+    executable = bbdown_path()
+    directory = executable.parent
+    web = directory / "BBDown.data"
+    tv = directory / "BBDownTV.data"
+    if LOGIN_PROCESS is not None and LOGIN_PROCESS.poll() is not None:
+        LOGIN_PROCESS = None
+    return {"available": True, "command": "BBDown login", "web_login": web.is_file() and web.stat().st_size > 0,
+            "tv_login": tv.is_file() and tv.stat().st_size > 0,
+            "web_updated": web.stat().st_mtime if web.is_file() else None,
+            "login_window_open": LOGIN_PROCESS is not None, "path": str(executable)}
+
+
+@router.get("/login/status")
+def login_status():
+    return login_state()
+
+
+@router.post("/login/start")
+def start_login():
+    global LOGIN_PROCESS
+    status = login_state()
+    if status["login_window_open"]:
+        return {**status, "started": False}
+    executable = bbdown_path()
+    # BBDown 1.6's documented `login` command displays an APP QR code in its own console.
+    LOGIN_PROCESS = subprocess.Popen(["cmd.exe", "/k", f'"{executable}" login'], cwd=executable.parent,
+                                     creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
+    return {**login_state(), "started": True}
+
+
 def queue_items() -> list[dict]:
     with core.database() as db:
         rows = db.execute("SELECT * FROM video_download_stack ORDER BY created DESC").fetchall()
@@ -163,9 +205,7 @@ def update_stack(item_id: str, *, status: str, error: str = ""):
 
 def download_one(job_id: str, item: dict, project_id: str, position: int, total: int) -> dict:
     destination, _ = core.resolve_destination(project_id, "video", "auto")
-    executable = Path(core.CONFIG.get("bbdown", "")).resolve()
-    if not executable.is_file():
-        raise RuntimeError("未找到 BBDown.exe，请在素材台设置中检查 BBDown 路径")
+    executable = bbdown_path()
     staging = core.DATA_DIR / 'video-downloads' / job_id / item['id']
     staging.mkdir(parents=True, exist_ok=True)
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
