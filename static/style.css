@@ -1039,6 +1039,16 @@ dialog::backdrop {
     font-weight: 550
 }
 
+#settings-dialog .dialog-heading {
+    position: sticky;
+    top: -22px;
+    z-index: 2;
+    margin: -22px -22px 0;
+    padding: 22px 22px 14px;
+    background: var(--c-ffffff);
+    border-bottom: 1px solid var(--c-dddddd)
+}
+
 .setting-row {
     padding: 18px 0;
     border-bottom: 1px solid var(--c-dddddd)
@@ -1185,11 +1195,13 @@ dialog::backdrop {
 }
 
 .desktop .topbar {
-    -webkit-app-region: drag
+    -webkit-app-region: no-drag
 }
 
 .desktop .top-actions,
-.desktop .brand {
+.desktop .top-actions *,
+.desktop .brand,
+.desktop .brand * {
     -webkit-app-region: no-drag
 }
 

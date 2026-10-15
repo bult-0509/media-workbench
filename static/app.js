@@ -1,4 +1,4 @@
-import { createProjectPicker } from './series-picker.js?v=1.3.1';
+import { createProjectPicker } from './series-picker.js';
 const $ = (q) => document.querySelector(q);
 const $$ = (q) => [...document.querySelectorAll(q)];
 const escape = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

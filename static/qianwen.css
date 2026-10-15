@@ -3,7 +3,12 @@ body {
     background: var(--c-f7f7f7);
     font-size: 15px
 }
-.shell{min-height:100vh;padding:6px 6px 6px 0}
+
+.shell {
+    min-height: 100vh;
+    padding: 6px 6px 6px 0
+}
+
 .topbar {
     position: absolute;
     right: 20px;
@@ -122,8 +127,41 @@ body {
     gap: 10px;
     flex-shrink: 0
 }
-.project-icon{display:none}.project-picker{flex:0 1 250px}.project-picker label{display:none}.project-picker select{font-size:14px;font-weight:500;padding:6px 0;max-width:100%;text-overflow:ellipsis}
-.destination-picker{width:145px}.destination-picker label{font-size:10px}.destination-picker select{font-size:11px;padding:0;max-width:100%}
+
+.project-icon {
+    display: none
+}
+
+.project-picker {
+    flex: 0 1 250px
+}
+
+.project-picker label {
+    display: none
+}
+
+.project-picker select {
+    font-size: 14px;
+    font-weight: 500;
+    padding: 6px 0;
+    max-width: 100%;
+    text-overflow: ellipsis
+}
+
+.destination-picker {
+    width: 145px
+}
+
+.destination-picker label {
+    font-size: 10px
+}
+
+.destination-picker select {
+    font-size: 11px;
+    padding: 0;
+    max-width: 100%
+}
+
 .content-layout {
     min-height: 0;
     display: block
@@ -438,7 +476,9 @@ h1 {
 }
 
 .desktop .project-strip>*,
-.desktop .sidebar-brand>* {
+.desktop .project-strip>* *,
+.desktop .sidebar-brand>*,
+.desktop .sidebar-brand>* * {
     -webkit-app-region: no-drag
 }
 
@@ -665,7 +705,7 @@ h1 {
         height: 58px
     }
 
-        .compact .browse-panel {
-            padding: 12px
-        }
-        }
+    .compact .browse-panel {
+        padding: 12px
+    }
+}
