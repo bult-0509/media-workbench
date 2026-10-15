@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $app = $PSScriptRoot
 $download = Join-Path $app 'tools\downloads'
 New-Item -ItemType Directory -Force -Path $download | Out-Null
@@ -19,10 +19,14 @@ if (-not (Test-Path $electron)) {
   if (-not (Test-Path $zip)) { Invoke-WebRequest 'https://github.com/electron/electron/releases/download/v44.3.0/electron-v44.3.0-win32-x64.zip' -OutFile $zip }
   $expanded = Join-Path $download 'electron'
   if (-not (Test-Path $expanded)) { Expand-Archive $zip -DestinationPath $expanded -Force }
-  $folder = Get-ChildItem $expanded -Directory | Select-Object -First 1
-  if (-not $folder) { throw 'Electron 安装包内容无效。' }
+  $source = $expanded
+  if (-not (Test-Path (Join-Path $source 'electron.exe'))) {
+    $nested = Get-ChildItem $expanded -Directory | Where-Object { Test-Path (Join-Path $_.FullName 'electron.exe') } | Select-Object -First 1
+    if ($nested) { $source = $nested.FullName }
+  }
+  if (-not (Test-Path (Join-Path $source 'electron.exe'))) { throw 'Electron 安装包内容无效。' }
   New-Item -ItemType Directory -Force -Path (Split-Path $electron) | Out-Null
-  Copy-Item (Join-Path $folder.FullName '*') (Split-Path $electron) -Recurse -Force
+  Copy-Item (Join-Path $source '*') (Split-Path $electron) -Recurse -Force
 }
 
 $ffmpeg = Join-Path $app 'tools\ffmpeg\bin\ffmpeg.exe'

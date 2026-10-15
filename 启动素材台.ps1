@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $app = $PSScriptRoot
 $config = Get-Content -Raw -Encoding UTF8 (Join-Path $app 'config.json') | ConvertFrom-Json
 $url = 'http://127.0.0.1:' + $config.port
