@@ -3,7 +3,6 @@ from __future__ import annotations
 import importlib
 import json
 import os
-import subprocess
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -32,6 +31,7 @@ async def lifespan(app):
 app = FastAPI(title="素材台 · 本地工作台", docs_url=None, redoc_url=None, lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
 from desktop_host import router as desktop_router
+
 app.include_router(desktop_router)
 app.include_router(series.router)
 
@@ -75,7 +75,6 @@ def bootstrap():
             "modules": [{"id": m, "name": name, "enabled": core.CONFIG["modules"].get(m, False), "installed": (core.APP_DIR / "modules" / f"{m}.py").exists()} for m, name in FEATURES.items()]}
 
 
-
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     series_id: str = ''
@@ -94,6 +93,29 @@ def create_project(body: ProjectCreate):
 @app.get("/api/projects/{project_id}/folders")
 def project_folders(project_id: str):
     return {"folders": core.folders(core.get_project(project_id))}
+
+
+class ProjectUpdate(BaseModel):
+    name: str | None = Field(None, max_length=80)
+    archived: bool | None = None
+
+
+@app.patch("/api/projects/{project_id}")
+def update_project(project_id: str, body: ProjectUpdate):
+    if body.name is None and body.archived is None:
+        raise HTTPException(400, "没有需要更新的内容")
+    core.get_project(project_id)    
+    current = project_id
+    if body.name is not None:
+        current = core.rename_project(current, body.name.strip())["id"]
+    if body.archived is not None:
+        current = core.set_project_archived(current, body.archived)["id"]
+    return next(p for p in core.projects() if p["id"] == current)
+
+
+@app.delete("/api/projects/{project_id}")
+def remove_project(project_id: str):
+    return core.delete_project(project_id)
 
 
 @app.get("/api/layouts")
@@ -233,4 +255,5 @@ app.mount("/static", StaticFiles(directory=core.APP_DIR / "static"), name="stati
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="127.0.0.1", port=int(core.CONFIG["port"]), log_level="warning")

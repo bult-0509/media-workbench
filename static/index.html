@@ -47,7 +47,8 @@
                         <div class="project-tree-actions"><button id="tree-new-project"
                                 class="text-button">新建项目</button><button id="tree-new-series"
                                 class="text-button">新建系列</button><button id="tree-organize"
-                                class="text-button">整理系列</button></div>
+                                class="text-button">整理系列</button><button id="tree-manage"
+                                class="text-button">管理项目</button></div>
                     </div>
                 </div>
                 <div class="destination-picker"><label for="destination-select">保存位置</label><select
@@ -210,7 +211,8 @@
     <header class="topbar">
         <div class="top-actions"><button id="compact-button" class="quiet-button" title="打开固定尺寸置顶窗口">置顶小窗</button>
             <div class="desktop-controls" hidden><button id="minimize-desktop" class="icon-button"
-                    aria-label="最小化">−</button><button id="close-desktop" class="icon-button" aria-label="关闭窗口">×</button>
+                    aria-label="最小化">−</button><button id="close-desktop" class="icon-button"
+                    aria-label="关闭窗口">×</button>
             </div>
         </div>
     </header>
@@ -241,14 +243,20 @@
         </div>
         <form id="project-form"><label id="project-name-field"><span id="project-name-label">项目名称</span><input
                     id="project-name" type="text" maxlength="80" autocomplete="off"></label><label
-                id="project-series-field">所属系列<select id="project-series-choice"></select></label>
+                id="project-series-field">所属系列<select id="project-series-choice"></select></label><label
+                id="project-target-field" hidden>选择项目<select id="project-target-choice"></select></label>
             <fieldset id="series-members-field" hidden>
                 <legend>选择要整理的项目</legend>
                 <div id="series-members"></div>
             </fieldset>
             <p id="project-form-error" role="alert"></p>
             <div class="project-form-actions"><button id="rename-series" type="button" class="text-button"
-                    hidden>更名系列</button><button id="project-dialog-cancel" type="button"
+                    hidden>更名系列</button><button id="archive-series" type="button" class="text-button"
+                    hidden>归档系列</button><button id="delete-series" type="button" class="text-button danger"
+                    hidden>删除系列</button><button id="rename-project" type="button" class="text-button"
+                    hidden>重命名项目</button><button id="archive-project" type="button" class="text-button"
+                    hidden>归档项目</button><button id="delete-project" type="button" class="text-button danger"
+                    hidden>删除项目</button><button id="project-dialog-cancel" type="button"
                     class="quiet-button">取消</button><button id="project-form-submit" type="submit"
                     class="small-primary">创建</button></div>
         </form>

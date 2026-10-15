@@ -11,10 +11,10 @@ import sqlite3
 import subprocess
 import threading
 import time
-import unicodedata
 from contextlib import contextmanager
 from pathlib import Path
 
+import unicodedata
 from fastapi import HTTPException
 
 APP_DIR = Path(__file__).resolve().parent
@@ -161,6 +161,9 @@ def init_db():
         CREATE TABLE IF NOT EXISTS project_series_members (
           project_id TEXT PRIMARY KEY, series_id TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS archived_projects (
+          project_id TEXT PRIMARY KEY, updated REAL NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS inbox_assignments (
           job_id TEXT PRIMARY KEY, project_id TEXT, section TEXT NOT NULL DEFAULT '正文',
           display_name TEXT DEFAULT '', instruction TEXT DEFAULT '', updated REAL NOT NULL
@@ -185,6 +188,9 @@ def init_db():
             db.execute("ALTER TABLE assets ADD COLUMN use_count INTEGER NOT NULL DEFAULT 0")
         if "last_used" not in asset_columns:
             db.execute("ALTER TABLE assets ADD COLUMN last_used REAL")
+        series_columns = {row["name"] for row in db.execute("PRAGMA table_info(project_series)")}
+        if "archived" not in series_columns:
+            db.execute("ALTER TABLE project_series ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
         db.execute("""CREATE TABLE IF NOT EXISTS asset_usage (
           id INTEGER PRIMARY KEY AUTOINCREMENT, asset_id TEXT NOT NULL, used_at REAL NOT NULL,
           scope TEXT NOT NULL, project_id TEXT DEFAULT ''
@@ -247,21 +253,23 @@ def projects() -> list[dict]:
             resolved = confined(path, PROJECTS_ROOT)
             output.append({"id": ident(path), "name": path.name, "path": str(resolved),
                            "modified": path.stat().st_mtime,
-                           "archived": path.name.startswith(("√", "×"))})
+                           "archived": False})
         except (OSError, HTTPException):
             continue
     with database() as db:
         membership = {r['project_id']: r['series_id'] for r in db.execute('SELECT * FROM project_series_members')}
         series = [dict(r) for r in db.execute('SELECT * FROM project_series')]
+        archived_ids = {r['project_id'] for r in db.execute('SELECT project_id FROM archived_projects')}
     names = {s['id']: s['name'] for s in series}
     for project in output:
         sid = membership.get(project['id'], '')
-        project.update(series_id=sid if sid in names else '', series_name=names.get(sid, ''), shared=False)
+        project.update(series_id=sid if sid in names else '', series_name=names.get(sid, ''),
+                       shared=False, archived=project['id'] in archived_ids)
     for group in series:
         try:
             path = confined(Path(group['shared_path']), PROJECTS_ROOT)
             output.append({'id': ident(path), 'name': '共享素材', 'path': str(path),
-                           'modified': group['created'], 'archived': False, 'shared': True,
+                           'modified': group['created'], 'archived': bool(group.get('archived')), 'shared': True,
                            'series_id': group['id'], 'series_name': group['name']})
         except (OSError, HTTPException):
             continue
@@ -294,6 +302,92 @@ def get_project(project_id: str) -> Path:
     if not project:
         raise HTTPException(404, "请选择有效的视频项目")
     return confined(Path(project["path"]), PROJECTS_ROOT)
+
+
+def find_project(project_id: str) -> dict:
+    project = next((p for p in projects() if p["id"] == project_id), None)
+    if not project:
+        raise HTTPException(404, "请选择有效的视频项目")
+    return project
+
+
+def _reassign_project(db, old_id: str, new_id: str, old_root: Path, new_root: Path) -> None:
+    db.execute("UPDATE OR REPLACE project_series_members SET project_id=? WHERE project_id=?", (new_id, old_id))
+    db.execute("UPDATE OR REPLACE project_workflow SET project_id=? WHERE project_id=?", (new_id, old_id))
+    db.execute("UPDATE OR REPLACE routes SET project_id=? WHERE project_id=?", (new_id, old_id))
+    db.execute("UPDATE OR REPLACE inbox_assignments SET project_id=? WHERE project_id=?", (new_id, old_id))
+    db.execute("UPDATE asset_usage SET project_id=? WHERE project_id=?", (new_id, old_id))
+    db.execute("UPDATE OR REPLACE stack_items SET project_id=? WHERE project_id=?", (new_id, old_id))
+    db.execute("UPDATE OR REPLACE stack_hidden SET project_id=? WHERE project_id=?", (new_id, old_id))
+    db.execute("UPDATE OR REPLACE archived_projects SET project_id=? WHERE project_id=?", (new_id, old_id))
+
+    old_prefix, new_prefix = str(old_root), str(new_root)
+    rows = [(r["id"], r["path"]) for r in
+            db.execute("SELECT id,path FROM assets WHERE source_id=?", ("project-" + old_id,))]
+    for old_asset_id, path in rows:
+        if not path.startswith(old_prefix):
+            continue
+        new_path = new_prefix + path[len(old_prefix):]
+        new_asset_id = ident(new_path)
+        db.execute("UPDATE OR REPLACE assets SET id=?, path=?, source_id=? WHERE id=?",
+                   (new_asset_id, new_path, "project-" + new_id, old_asset_id))
+        db.execute("UPDATE OR REPLACE stack_items SET asset_id=? WHERE asset_id=?", (new_asset_id, old_asset_id))
+        db.execute("UPDATE OR REPLACE stack_hidden SET asset_id=? WHERE asset_id=?", (new_asset_id, old_asset_id))
+        db.execute("UPDATE asset_usage SET asset_id=? WHERE asset_id=?", (new_asset_id, old_asset_id))
+
+
+def rename_project(project_id: str, new_name: str) -> dict:
+    name = safe_filename(new_name)
+    if not name or name.startswith("."):
+        raise HTTPException(400, "请输入有效的项目名称")
+    old_root = confined(Path(find_project(project_id)["path"]), PROJECTS_ROOT)
+    new_root = confined(PROJECTS_ROOT / name, PROJECTS_ROOT, exists=False)
+    if new_root.exists():
+        raise HTTPException(409, "同名项目已存在")
+    old_id, new_id = ident(old_root), ident(new_root)
+    os.rename(old_root, new_root)
+    try:
+        with database() as db:
+            _reassign_project(db, old_id, new_id, old_root, new_root)
+    except Exception:
+        os.rename(new_root, old_root)
+        raise
+    LAYOUT_CACHE.update(at=0, value=None)
+    return find_project(new_id)
+
+
+def set_project_archived(project_id: str, archived: bool) -> dict:
+    find_project(project_id)
+    with database() as db:
+        if archived:
+            db.execute("INSERT INTO archived_projects(project_id,updated) VALUES(?,?) "
+                       "ON CONFLICT(project_id) DO UPDATE SET updated=excluded.updated", (project_id, time.time()))
+        else:
+            db.execute("DELETE FROM archived_projects WHERE project_id=?", (project_id,))
+    return find_project(project_id)
+
+
+def delete_project(project_id: str) -> dict:
+    project = find_project(project_id)
+    if not project["archived"]:
+        raise HTTPException(409, "请先归档项目再删除")
+    root = confined(Path(project["path"]), PROJECTS_ROOT)
+    with database() as db:
+        asset_ids = [r["id"] for r in db.execute("SELECT id FROM assets WHERE source_id=?", ("project-" + project_id,))]
+        db.execute("DELETE FROM assets WHERE source_id=?", ("project-" + project_id,))
+        db.execute("DELETE FROM project_series_members WHERE project_id=?", (project_id,))
+        db.execute("DELETE FROM project_workflow WHERE project_id=?", (project_id,))
+        db.execute("DELETE FROM routes WHERE project_id=?", (project_id,))
+        db.execute("DELETE FROM stack_items WHERE project_id=?", (project_id,))
+        db.execute("DELETE FROM stack_hidden WHERE project_id=?", (project_id,))
+        db.execute("DELETE FROM archived_projects WHERE project_id=?", (project_id,))
+        db.execute("UPDATE inbox_assignments SET project_id='' WHERE project_id=?", (project_id,))
+        for asset_id in asset_ids:
+            db.execute("DELETE FROM stack_items WHERE asset_id=?", (asset_id,))
+            db.execute("DELETE FROM stack_hidden WHERE asset_id=?", (asset_id,))
+    recycled = recycle(root) if root.exists() else False
+    LAYOUT_CACHE.update(at=0, value=None)
+    return {"ok": True, "recycled": recycled, "path": str(root)}
 
 
 def folders(project: Path) -> list[dict]:
@@ -419,11 +513,11 @@ def resolve_destination(project_id: str, category: str, relative: str = "auto") 
     if matches:
         chosen = sorted(matches)[0][2]
         count = locations.get(chosen, 0)
-        return confined(project / chosen, project), f"沿用此项目的目录习惯" + (f" · 已有 {count} 个同类文件" if count else "")
+        return confined(project / chosen, project), f"沿用此项目的目录习惯" + ( f" · 已有 {count} 个同类文件" if count else "")
     if locations.get(".", 0):
         return project, f"沿用此项目根目录 · 已有 {locations['.']} 个同类文件"
     for relative, votes in learned["habits"].get(category, []):
-        if relative in available_names and (relative == "." or normalize(Path(relative).name).strip("【】[] ") in ROUTE_NAMES.get(category, [])):
+        if relative in available_names and ( relative == "." or normalize(Path(relative).name).strip("【】[] ") in ROUTE_NAMES.get(category, [])):
             return confined(project / relative, project), f"参考最近项目 · {votes} 个项目采用此位置"
     return project, "按近期项目习惯保留在根目录，可手动调整"
 
@@ -465,10 +559,34 @@ def safe_filename(name: str) -> str:
     clean = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).strip(" .")
     if len(clean) > 180:
         suffix = Path(clean).suffix[:16]
-        clean = clean[:180-len(suffix)] + suffix
+        clean = clean[:180 - len(suffix)] + suffix
     if not clean or clean.split(".")[0].upper() in {"CON", "PRN", "AUX", "NUL", *[f"COM{i}" for i in range(10)], *[f"LPT{i}" for i in range(10)]}:
         clean = "素材_" + clean
     return clean
+
+
+def recycle(path: Path) -> bool:
+    if os.name != "nt":
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    class SHFILEOPSTRUCTW(ctypes.Structure):
+        _fields_ = [("hwnd", wintypes.HWND), ("wFunc", wintypes.UINT),
+                    ("pFrom", wintypes.LPCWSTR), ("pTo", wintypes.LPCWSTR),
+                    ("fFlags", ctypes.c_uint16), ("fAnyOperationsAborted", wintypes.BOOL),
+                    ("hNameMappings", ctypes.c_void_p), ("lpszProgressTitle", wintypes.LPCWSTR)]
+
+    FO_DELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_SILENT, FOF_NOERRORUI = 3, 0x40, 0x10, 0x4, 0x400
+    operation = SHFILEOPSTRUCTW()
+    operation.wFunc = FO_DELETE
+    operation.pFrom = str(path) + "\0"
+    operation.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI
+    try:
+        code = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(operation))
+    except OSError:
+        return False
+    return code == 0 and not operation.fAnyOperationsAborted
 
 
 def copy_into(source: Path, destination: Path, name: str | None = None, progress=None) -> dict:
@@ -479,7 +597,7 @@ def copy_into(source: Path, destination: Path, name: str | None = None, progress
     with COPY_LOCK:
         original = destination / filename
         if original.exists() and (original.resolve() == source or (
-            original.stat().st_size == source.stat().st_size and digest_file(original) == digest_file(source)
+                original.stat().st_size == source.stat().st_size and digest_file(original) == digest_file(source)
         )):
             return {"path": str(original), "name": original.name, "status": "already_exists", "size": original.stat().st_size, "sha256": digest_file(original)}
         stem, suffix = Path(filename).stem, Path(filename).suffix

@@ -1,6 +1,6 @@
 """Series organize existing projects without moving their files."""
-import re
 import os
+import re
 import threading
 import time
 import uuid
@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+
 import core
 
 router = APIRouter(prefix='/api/series')
@@ -49,16 +50,16 @@ def sync_shared_files(project_id):
             rel = path.relative_to(root)
             rows.append((core.ident(path), str(path), 'series-' + group['id'], path.stem, kind,
                          path.suffix.lower(), stat.st_size, stat.st_mtime, str(rel),
-                         rel.parts[0] if len(rel.parts)>1 else group['name'], core.normalize(f"{path.stem} {rel} {group['name']}")))
+                         rel.parts[0] if len(rel.parts) > 1 else group['name'], core.normalize(f"{path.stem} {rel} {group['name']}")))
     with core.database() as db:
         db.execute('UPDATE assets SET scanned=0 WHERE source_id=?', ('series-' + group['id'],))
-        db.executemany('''INSERT INTO assets(id,path,source_id,title,kind,extension,size,modified,relative,collection,search_text,scanned)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET source_id=excluded.source_id,
-          size=excluded.size,modified=excluded.modified,scanned=1''', rows)
+        db.executemany('''INSERT INTO assets(id, path, source_id, title, kind, extension, size, modified, relative, collection, search_text, scanned)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1) ON CONFLICT(id) DO UPDATE
+                SET source_id=excluded.source_id, size =excluded.size, modified=excluded.modified, scanned=1''', rows)
         for row in rows:
-            db.execute('''INSERT OR IGNORE INTO stack_items SELECT ?,?,? WHERE NOT EXISTS
+            db.execute('''INSERT OR IGNORE INTO stack_items SELECT ?, ?, ? WHERE NOT EXISTS
               (SELECT 1 FROM stack_hidden WHERE project_id=? AND asset_id=?)''',
-                       (project_id,row[0],row[7],project_id,row[0]))
+                       (project_id, row[0], row[7], project_id, row[0]))
 
 
 def validate_name(name):
@@ -89,20 +90,54 @@ def create(body: SeriesCreate):
         for folder in core.STANDARD_PROJECT_FOLDERS:
             (directory / folder).mkdir()
         with core.database() as db:
-            db.execute('INSERT INTO project_series VALUES(?,?,?,?)', (sid, name, str(directory), time.time()))
+            db.execute('INSERT INTO project_series(id,name,shared_path,created) VALUES(?,?,?,?)', (sid, name, str(directory), time.time()))
         return get_group(sid)
 
 
+class SeriesUpdate(BaseModel):
+    name: str | None = Field(None, max_length=80)
+    archived: bool | None = None
+
+
 @router.patch('/{series_id}')
-def rename(series_id: str, body: SeriesCreate):
-    name = validate_name(body.name)
+def update(series_id: str, body: SeriesUpdate):
     with LOCK:
-        get_group(series_id)
-        if any(s['id'] != series_id and s['name'].casefold() == name.casefold() for s in groups()):
-            raise HTTPException(409, '已有同名系列')
+        current = get_group(series_id)
+        name = current['name']
+        archived = int(current.get('archived') or 0)
+        if body.name is not None:
+            name = validate_name(body.name)
+            if any(s['id'] != series_id and s['name'].casefold() == name.casefold() for s in groups()):
+                raise HTTPException(409, '已有同名系列')
+        if body.archived is not None:
+            archived = 1 if body.archived else 0
         with core.database() as db:
-            db.execute('UPDATE project_series SET name=? WHERE id=?', (name, series_id))
+            db.execute('UPDATE project_series SET name=?, archived=? WHERE id=?', (name, archived, series_id))
     return get_group(series_id)
+
+
+@router.delete('/{series_id}')
+def remove(series_id: str):
+    with LOCK:
+        group = get_group(series_id)
+        source_id = 'series-' + series_id
+        with core.database() as db:
+            asset_ids = [r['id'] for r in db.execute('SELECT id FROM assets WHERE source_id=?', (source_id,))]
+            db.execute('DELETE FROM project_series_members WHERE series_id=?', (series_id,))
+            db.execute('DELETE FROM project_series WHERE id=?', (series_id,))
+            db.execute('DELETE FROM assets WHERE source_id=?', (source_id,))
+            for asset_id in asset_ids:
+                db.execute('DELETE FROM stack_items WHERE asset_id=?', (asset_id,))
+                db.execute('DELETE FROM stack_hidden WHERE asset_id=?', (asset_id,))
+
+        shared, recycled = None, False
+        try:
+            shared = core.confined(Path(group['shared_path']), core.PROJECTS_ROOT)
+        except HTTPException:
+            shared = None
+        if shared is not None and shared.exists():
+            recycled = core.recycle(shared)
+    return {'ok': True, 'recycled': recycled, 'shared_path': group['shared_path']}
 
 
 class Membership(BaseModel):
