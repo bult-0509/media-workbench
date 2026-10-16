@@ -48,7 +48,7 @@ const paths = {
 };
 const icon = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.folder}</svg>`;
 const kindLabel = { video: '视频', audio: '音频', image: '图片' };
-const state = { boot: null, view: 'library', source: '', collection: '', folder: '', kind: '', q: '', page: 1, pages: 1, stats: null, items: [], selected: null, project: '', relative: 'auto', checked: new Set(), request: 0, jobs: new Map(), toastTimer: null, detailRequest: 0, tracks: [], stack: [], stackChecked: new Set(), stackCount: 0, compact: false, issue: '', inboxSelected: new Set(), videoMode: 'bv', videoStack: [], videoChecked: new Set(), librarySort: 'modified-desc', stackSort: 'modified-desc', sourceTree: {}, treeOpen: new Set(), treeLoading: new Set(), explorerParent: '', bbdown: null };
+const state = { boot: null, view: 'library', source: '', collection: '', folder: '', kind: '', q: '', page: 1, pages: 1, stats: null, items: [], selected: null, project: '', relative: 'auto', checked: new Set(), request: 0, jobs: new Map(), toastTimer: null, detailRequest: 0, tracks: [], stack: [], stackChecked: new Set(), stackCount: 0, compact: false, issue: '', inboxSelected: new Set(), videoMode: 'bv', videoStack: [], videoChecked: new Set(), librarySort: 'modified-desc', stackSort: 'modified-desc', sourceTree: {}, treeOpen: new Set(), treeLoading: new Set(), explorerParent: '', bbdown: null, lastScanProblem: '', activeJobs: [] };
 
 function size(bytes) { if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`; if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`; return `${(bytes / 1024 ** 3).toFixed(2)} GB`; }
 function duration(value) { if (!value) return ''; const s = Math.round(value); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }
@@ -164,11 +164,31 @@ async function loadFolders() {
   state.relative = 'auto'; $('#destination-select').value = 'auto';
 }
 
+function scanProblem() {
+  const scan = state.stats?.scan;
+  if (!scan) return '';
+  if (scan.error) return `扫描失败：${scan.error}`;
+  const skipped = scan.skipped || [];
+  if (skipped.length) return `扫描跳过了 ${skipped.length} 个来源：${skipped.map(s => `${s.name}（${s.error}）`).join('；')}`;
+  return '';
+}
+function updateFooter() {
+  if (!state.stats) return;
+  const parts = [];
+  if (state.stats.scan.running) parts.push('正在扫描…');
+  if (state.activeJobs.length) parts.push(`${state.activeJobs.length} 个任务进行中 · ${state.activeJobs[0].title} ${state.activeJobs[0].progress}%`);
+  const problem = scanProblem();
+  if (problem) parts.push(problem);
+  $('#footer-status').textContent = parts.join(' · ');
+}
 async function loadStats() {
   const previous = JSON.stringify(state.stats);
   state.stats = await api('/api/library/stats');
   $('#indexed-count').textContent = `${state.stats.total.toLocaleString()} 份本地素材`;
-  $('#footer-status').textContent = state.stats.scan.running ? '正在扫描…' : '';
+  const problem = scanProblem();
+  if (problem && problem !== state.lastScanProblem) toast(problem);
+  state.lastScanProblem = problem;
+  updateFooter();
   if (previous !== JSON.stringify(state.stats)) { nav(); filters(); }
 }
 function filters() {
@@ -188,7 +208,14 @@ async function loadAssets() {
   $('#results-label').textContent = `${data.total.toLocaleString()} 份素材`;
   $('#page-indicator').textContent = `${data.page} / ${data.pages}`;
   $('#previous-page').disabled = state.page <= 1; $('#next-page').disabled = state.page >= state.pages;
-  if (!data.items.length) { state.selected = null; renderEmptyDetail(); $('#asset-grid').innerHTML = `<div class="empty-state">${icon('search')}<h2>${state.stats?.scan?.running ? '正在整理本地素材' : '这里还没有合适的素材'}</h2><p>${state.view === 'favorites' ? '点击素材上的收藏按钮，把常用的留下来。' : '试试素材名、文件夹名，或换一个更短的关键词。'}</p></div>`; return; }
+  if (!data.items.length) {
+    state.selected = null; renderEmptyDetail();
+    const problem = scanProblem();
+    const title = state.stats?.scan?.running ? '正在整理本地素材' : problem ? '扫描没有正常完成' : '这里还没有合适的素材';
+    const detail = problem || (state.view === 'favorites' ? '点击素材上的收藏按钮，把常用的留下来。' : '试试素材名、文件夹名，或换一个更短的关键词。');
+    $('#asset-grid').innerHTML = `<div class="empty-state">${icon('search')}<h2>${escape(title)}</h2><p>${escape(detail)}</p></div>`;
+    return;
+  }
   $('#asset-grid').innerHTML = data.items.map(a => `<article class="asset-card ${state.selected?.id === a.id ? 'selected' : ''}" data-id="${a.id}" data-drag-library="${a.id}" draggable="true"><label class="asset-check"><input type="checkbox" data-check="${a.id}" aria-label="选择 ${escape(a.title)}" ${state.checked.has(a.id) ? 'checked' : ''}></label><button class="asset-open" data-open="${a.id}" aria-label="预览 ${escape(a.title)}"><div class="asset-cover ${a.kind}">${a.kind === 'audio' ? wave(a.id) : `<img src="/api/library/assets/${a.id}/thumb" alt="" loading="lazy" width="320" height="200">`}<span class="cover-badge">${escape(a.extension.slice(1).toUpperCase())}</span></div><div class="asset-info"><span class="asset-title" title="${escape(a.title)}">${escape(a.title)}</span><div class="asset-meta"><span>${escape(a.collection === 'memes_Video' ? '美式鬼畜' : a.collection)}</span><span>${size(a.size)}</span>${a.use_count ? `<span title="已拖入剪辑软件 ${a.use_count} 次">已用 ${a.use_count} 次</span>` : ''}</div></div></button></article>`).join('');
   $$('.asset-cover img').forEach(img => img.onerror = () => { img.replaceWith(Object.assign(document.createElement('span'), { className: 'cover-fallback', innerHTML: icon('video') })); });
   $$('[data-open]').forEach(b => b.onclick = () => selectAsset(b.dataset.open));
@@ -314,8 +341,8 @@ async function loadSubtitleStatus() { const result = await api('/api/subtitles/s
 async function loadJobs(render = false) {
   const { items } = await api('/api/jobs');
   for (const j of items) { const old = state.jobs.get(j.id); if (old && old !== j.status && ['succeeded', 'failed'].includes(j.status)) { if (j.status === 'succeeded') { const exists = j.result.every(r => r.status === 'already_exists'); toast(exists ? '目标位置已有相同文件，已跳过重复保存' : `已保存到项目：${j.result.map(r => r.name).join('、')}`); state.checked.clear(); selection(); $$('[data-check]').forEach(c => c.checked = false); } else toast(`任务未完成：${j.error}`); } state.jobs.set(j.id, j.status); }
-  const active = items.filter(j => ['queued', 'running'].includes(j.status)); if (active.length) $('#footer-status').textContent = `${active.length} 个任务进行中 · ${active[0].title} ${active[0].progress}%`;
-  else if (state.stats) $('#footer-status').textContent = '';
+  state.activeJobs = items.filter(j => ['queued', 'running'].includes(j.status));
+  updateFooter();
   if (render || state.view === 'history') {
     const labels = { queued: '等待处理', running: '处理中', succeeded: '已保存', failed: '未完成' };
     $('#history-list').innerHTML = items.length ? items.map(j => `<article class="history-card"><div class="history-head"><strong>${escape(j.title)}</strong><span class="job-state ${j.status}">${labels[j.status] || j.status}</span></div><div class="history-time">${new Date(j.created * 1000).toLocaleString('zh-CN')}</div>${['queued', 'running'].includes(j.status) ? `<progress value="${j.progress}" max="100" aria-label="保存进度">${j.progress}%</progress>` : ''}${j.result.map(r => `<p class="history-path">${r.status === 'already_exists' ? '已存在 · ' : ''}${escape(r.path)}</p>`).join('')}${j.error ? `<p class="history-error">${escape(j.error)}</p>` : ''}${j.result.length ? `<button class="text-button" data-job-folder="${j.id}">打开保存位置 ↗</button>` : ''}</article>`).join('') : '<div class="empty-state">保存过的素材和处理结果，会出现在这里。</div>';

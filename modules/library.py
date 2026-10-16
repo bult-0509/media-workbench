@@ -14,59 +14,75 @@ from pydantic import BaseModel, Field
 import core
 
 router = APIRouter(prefix="/api/library", dependencies=[Depends(lambda: core.require_module("library"))])
-SCAN = {"running": False, "count": 0, "last_scan": None, "error": None, "pending": False}
+SCAN = {"running": False, "count": 0, "last_scan": None, "error": None, "skipped": [], "pending": False}
 SCAN_LOCK = threading.Lock()
 MEDIA_LOCK = threading.Semaphore(2)
 CACHE = core.DATA_DIR / "previews"
 CACHE.mkdir(exist_ok=True)
 
 
+def collect_source(source, seen, rows):
+    root = Path(source["path"])
+    if not root.exists():
+        return
+    core.confined(root, core.VIDEO_ROOT)
+    for current, dirs, filenames in os.walk(root, followlinks=False):
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d not in {"node_modules", "__pycache__", "Backup"}]
+        for name in filenames:
+            path = Path(current) / name
+            kind = core.kind_of(path)
+            if not kind:
+                continue
+            try:
+                resolved = core.confined(path, root)
+                if str(resolved).casefold() in seen:
+                    continue
+                stat = path.stat()
+            except (OSError, HTTPException):
+                continue
+            seen.add(str(resolved).casefold())
+            relative = path.relative_to(root)
+            collection = relative.parts[0] if len(relative.parts) > 1 else source["name"]
+            searchable = core.normalize(f"{path.stem} {relative} {source['name']}")
+            if "memes_video" in searchable:
+                searchable += " 美式鬼畜 鬼畜 梗 搞笑"
+            rows.append(
+                (core.ident(resolved), str(resolved), source["id"], path.stem, kind, path.suffix.lower(), stat.st_size,
+                 stat.st_mtime, str(relative), collection, searchable))
+            SCAN["count"] = len(rows)
+
+
 def scan_now():
     if not SCAN_LOCK.acquire(blocking=False):
         return
-    SCAN.update(running=True, count=0, error=None, pending=False)
+    SCAN.update(running=True, count=0, error=None, skipped=[], pending=False)
     try:
         seen = set()
         rows = []
+        skipped = []
         for source in core.indexed_source_configs():
-            root = Path(source["path"])
-            if not root.exists():
-                continue
-            core.confined(root, core.VIDEO_ROOT)
-            for current, dirs, filenames in os.walk(root, followlinks=False):
-                dirs[:] = [d for d in dirs if not d.startswith(".") and d not in {"node_modules", "__pycache__", "Backup"}]
-                for name in filenames:
-                    path = Path(current) / name
-                    kind = core.kind_of(path)
-                    if not kind:
-                        continue
-                    try:
-                        resolved = core.confined(path, root)
-                        if str(resolved).casefold() in seen:
-                            continue
-                        stat = path.stat()
-                    except (OSError, HTTPException):
-                        continue
-                    seen.add(str(resolved).casefold())
-                    relative = path.relative_to(root)
-                    collection = relative.parts[0] if len(relative.parts) > 1 else source["name"]
-                    searchable = core.normalize(f"{path.stem} {relative} {source['name']}")
-                    if "memes_video" in searchable:
-                        searchable += " 美式鬼畜 鬼畜 梗 搞笑"
-                    rows.append((core.ident(resolved), str(resolved), source["id"], path.stem, kind, path.suffix.lower(), stat.st_size,
-                                 stat.st_mtime, str(relative), collection, searchable))
-                    SCAN["count"] = len(rows)
+            try:
+                collect_source(source, seen, rows)
+            except Exception as exc:
+                skipped.append({"id": source["id"], "name": source["name"], "path": source["path"],
+                                "error": str(getattr(exc, "detail", exc))})
         valid_sources = {source["id"] for source in core.indexed_source_configs()}
         rows = [row for row in rows if row[2] in valid_sources]
         with core.database() as db:
             db.execute("UPDATE assets SET scanned=0")
-            db.executemany("""INSERT INTO assets(id,path,source_id,title,kind,extension,size,modified,relative,collection,search_text,scanned)
-              VALUES(?,?,?,?,?,?,?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET
-              source_id=excluded.source_id,kind=excluded.kind,extension=excluded.extension,size=excluded.size,
-              modified=excluded.modified,relative=excluded.relative,collection=excluded.collection,
-              search_text=excluded.search_text,scanned=1""", rows)
-        SCAN.update(last_scan=time.time())
-        core.learn_layouts(force=True)
+            db.executemany(
+                """INSERT INTO assets(id, path, source_id, title, kind, extension, size, modified, relative, collection,
+                                      search_text, scanned)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1) ON CONFLICT(id) DO
+                   UPDATE
+                   SET
+                       source_id=excluded.source_id, kind=excluded.kind, extension=excluded.extension, size =excluded.size, modified=excluded.modified, relative =excluded.relative, collection=excluded.collection, search_text=excluded.search_text, scanned=1""",
+                rows)
+        SCAN.update(last_scan=time.time(), skipped=skipped)
+        try:
+            core.learn_layouts(force=True)
+        except Exception:
+            pass
     except Exception as exc:
         SCAN["error"] = str(exc)
     finally:
@@ -229,8 +245,8 @@ def thumbnail(asset_id: str):
                             img.convert("RGB").save(cache, "JPEG", quality=80)
                     else:
                         result = subprocess.run([ffmpeg(), "-hide_banner", "-loglevel", "error", "-threads", "1", "-i", asset["path"],
-                           "-frames:v", "1", "-vf", "thumbnail=12,scale=640:400:force_original_aspect_ratio=decrease", "-threads", "1", "-y", str(cache)],
-                           capture_output=True, timeout=20, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                            "-frames:v", "1", "-vf", "thumbnail=12,scale=640:400:force_original_aspect_ratio=decrease", "-threads", "1", "-y", str(cache)],
+                            capture_output=True, timeout=20, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                         if result.returncode:
                             raise ValueError("无法生成预览")
                 except Exception:
