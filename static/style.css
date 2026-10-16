@@ -1094,6 +1094,26 @@ dialog::backdrop {
     box-shadow: 0 5px 20px var(--c-0002)
 }
 
+#drop-hint {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--c-ffffff);
+    opacity: .9;
+    z-index: 200;
+    pointer-events: none
+}
+
+#drop-hint span {
+    border: 2px dashed var(--c-cccccc);
+    border-radius: 12px;
+    padding: 28px 44px;
+    color: var(--c-666666);
+    font-size: 15px
+}
+
 .stack-page .detail-panel {
     display: none
 }

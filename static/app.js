@@ -468,6 +468,48 @@ $('#collapse-sidebar').innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">
 $('#collapse-sidebar').onclick = () => { const collapsed = document.body.classList.toggle('nav-collapsed'); $('#collapse-sidebar').setAttribute('aria-label', collapsed ? '展开导航' : '收起导航'); };
 if (window.mediaDesk) { $('.desktop-controls').hidden = false; $('#minimize-desktop').onclick = () => window.mediaDesk.minimize(); $('#close-desktop').onclick = () => window.mediaDesk.close(); }
 
+const isFileDrag = event => [...(event.dataTransfer?.types || [])].includes('Files');
+window.addEventListener('dragover', event => {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  const usable = !!window.mediaDesk?.pathForFile;
+  event.dataTransfer.dropEffect = usable ? 'copy' : 'none';
+  if (usable) $('#drop-hint').hidden = false;
+});
+window.addEventListener('dragleave', event => {
+  if (event.relatedTarget) return;
+  $('#drop-hint').hidden = true;
+});
+window.addEventListener('drop', event => {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  $('#drop-hint').hidden = true;
+  if (!window.mediaDesk?.pathForFile) { toast('请在素材台桌面窗口里拖入'); return; }
+  if (!enabled('library')) { toast('素材库模块已停用，无法添加来源'); return; }
+  run(async () => {
+    const paths = [...event.dataTransfer.files]
+      .map(file => { try { return window.mediaDesk.pathForFile(file); } catch { return ''; } })
+      .filter(Boolean);
+    if (!paths.length) { toast('没有读到路径，请拖入文件夹'); return; }
+    const added = [], failed = [];
+    let last = null;
+    for (const path of paths) {
+      try {
+        last = await api('/api/sources', { method: 'POST', body: { path } });
+        state.boot.sources.push(last); added.push(last.name);
+      } catch (error) { failed.push(`${path} — ${error.message}`); }
+    }
+    if (last) {
+      state.source = last.id; state.collection = ''; state.folder = ''; state.explorerParent = ''; state.page = 1;
+      nav(); navigate('library', true);
+    }
+    const parts = [];
+    if (added.length) parts.push(`已加入 ${added.length} 个来源：${added.join('、')}，正在识别其中的素材`);
+    if (failed.length) parts.push(`${failed.length} 个没加上：${failed.join('；')}`);
+    if (parts.length) toast(parts.join('。'));
+  });
+});
+
 
 $('#stack-share').onclick = () => run(async () => {
   if (!state.sharedProject || !state.stackChecked.size) return;
